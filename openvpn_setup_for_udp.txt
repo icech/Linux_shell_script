@@ -1,0 +1,140 @@
+﻿#!/bin/bash
+echo "install openvpn"
+
+
+###install openvpn and basic software
+
+yum install epel-release 
+yum install openvpn easy-rsa -y
+yum install tcl spawn expect -y                       
+
+
+###Configuring OpenVPN
+###edit server.conf 
+
+cp /usr/share/doc/openvpn-*/sample/sample-config-files/server.conf /etc/openvpn
+sed  -i 's/\([:;:]push\)\(.*re\)/push\2/g' /etc/openvpn/server.conf
+sed  -i 's/\;\(pus.*NS\)\ 1.*/\1\ 8.8.8.8\"/g'  /etc/openvpn/server.conf
+sed  -i 's/\;\(pus.*NS\)\ 2.*/\1\ 8.8.4.4\"/g'  /etc/openvpn/server.conf 
+sed  -i 's/\;user/user/g'  /etc/openvpn/server.conf 
+sed  -i 's/\;group/group/g'  /etc/openvpn/server.conf
+sed  -i 's/\;duplicate-cn/duplicate-cn/g'  /etc/openvpn/server.conf  
+  
+
+###Generating Keys and Certificates
+
+mkdir -p /etc/openvpn/easy-rsa/keys 
+cp -rf /usr/share/easy-rsa/2.0/* /etc/openvpn/easy-rsa
+sed  -i 's/\(KEY_NAME.*\"\).*RSA/\1server/g' /etc/openvpn/easy-rsa/vars
+
+cp /etc/openvpn/easy-rsa/openssl-1.0.0.cnf /etc/openvpn/easy-rsa/openssl.cnf
+
+cd /etc/openvpn/easy-rsa
+source ./vars
+./clean-all
+
+/usr/bin/expect << EOF
+
+spawn ./build-ca
+expect "Country" {send "\r"}
+expect "State" {send "\r"}
+expect "Locality" {send "\r"}
+expect "Organization" {send "\r"}
+expect "Organizational" {send "\r"}
+expect "Common" {send "\r"}
+expect "Name" {send "\r"}
+expect "Email" {send "\r"}
+expect eof
+EOF
+
+/usr/bin/expect << EOF
+spawn ./build-key-server server
+expect "Country" {send "\r"}
+expect "State" {send "\r"}
+expect "Locality" {send "\r"}
+expect "Organization" {send "\r"}
+expect "Organizational" {send "\r"}
+expect "Common" {send "\r"}
+expect "Name" {send "\r"}
+expect "Email" {send "\r"}
+expect "challenge" {send "\r"}
+expect "optional" {send "\r"}
+expect "certificate" {send "y\r"}
+expect "commit" {send "y\r"}
+expect eof
+EOF
+
+
+
+./build-dh
+
+cd /etc/openvpn/easy-rsa/keys
+cp dh2048.pem ca.crt server.crt server.key /etc/openvpn
+
+cd /etc/openvpn/easy-rsa
+
+/usr/bin/expect << EOF
+spawn ./build-key client
+expect "Country" {send "\r"}
+expect "State" {send "\r"}
+expect "Locality" {send "\r"}
+expect "Organization" {send "\r"}
+expect "Organizational" {send "\r"}
+expect "Common" {send "\r"}
+expect "Name" {send "\r"}
+expect "Email" {send "\r"}
+expect "challenge" {send "\r"}
+expect "optional" {send "\r"}
+expect "certificate" {send "y\r"}
+expect "commit" {send "y\r"}
+expect eof
+EOF
+
+###Routing
+
+yum install iptables-services -y
+systemctl mask firewalld
+systemctl enable iptables
+systemctl stop firewalld
+systemctl start iptables
+iptables --flush
+
+iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+iptables-save > /etc/sysconfig/iptables
+
+
+if grep -q "^net\.ipv4" /etc/sysctl.conf
+then
+    sed  -i 's/\(^net\.ipv4.*\=\).*/\11/g' /etc/sysctl.conf
+else
+    sed  -i '1a net.ipv4.ip_forward = 1' /etc/sysctl.conf
+fi
+
+
+###Starting OpenVPN
+
+systemctl restart network.service
+systemctl -f enable openvpn@server.service
+systemctl start openvpn@server.service
+
+
+
+###Configuring a Client
+
+cd ~
+echo -e "client\ndev tun\nproto udp\nremote your_server_ip 1194\nresolv-retry infinite\nnobind\npersist-key\npersist-tun\ncomp-lzo\nverb 3">test1.ovpn
+echo "<ca>">>test1.ovpn
+cat /etc/openvpn/easy-rsa/keys/ca.crt >>test1.ovpn
+echo "</ca>">>test1.ovpn 
+echo "<key>">>test1.ovpn 
+cat /etc/openvpn/easy-rsa/keys/client.key>>test1.ovpn
+echo "</key>">>test1.ovpn 
+echo "<cert>">>test1.ovpn
+cat /etc/openvpn/easy-rsa/keys/client.crt >>test1.ovpn 
+echo "</cert>">>test1.ovpn 
+sed  -i 's/your_server_ip/'$(curl icanhazip.com)'/g' test1.ovpn
+
+echo "FINISH"
+
+
+
