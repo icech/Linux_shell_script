@@ -1,0 +1,2 @@
+This script follows https://www.digitalocean.com/community/tutorials/how-to-setup-and-configure-an-openvpn-server-on-centos-7
+I transform it form mannual setup to automatic setup and test successfully on my own Tencent cloud server which runs on Centos7！
